@@ -14,6 +14,19 @@ struct AuthResponse: Codable {
     let refreshToken: String
 }
 
+struct RegistrationResponse: Codable {
+    let userId: String
+    let message: String
+    let expiresAt: String?
+}
+
+struct APIErrorResponse: Codable, LocalizedError {
+    let error: String
+    let userId: String?
+
+    var errorDescription: String? { error }
+}
+
 struct Track: Codable {
     let trackId: String
     let userId: String
@@ -30,7 +43,7 @@ class APIService {
     private init() {}
 
     // MARK: - Register
-    func register(email: String, password: String, username: String, displayName: String, completion: @escaping (Result<AuthResponse, Error>) -> Void) {
+    func register(email: String, password: String, username: String, displayName: String, completion: @escaping (Result<RegistrationResponse, Error>) -> Void) {
 
         guard let url = URL(string: "\(baseURL)/auth/register") else { return }
 
@@ -53,14 +66,26 @@ class APIService {
                 return
             }
 
-            guard let data = data else {
+            guard
+                let data = data,
+                let httpResponse = response as? HTTPURLResponse
+            else {
                 completion(.failure(NSError(domain: "NoData", code: -1)))
                 return
             }
 
+            guard 200..<300 ~= httpResponse.statusCode else {
+                if let apiError = try? JSONDecoder().decode(APIErrorResponse.self, from: data) {
+                    completion(.failure(apiError))
+                } else {
+                    completion(.failure(NSError(domain: "ServerError", code: httpResponse.statusCode)))
+                }
+                return
+            }
+
             do {
-                let authResponse = try JSONDecoder().decode(AuthResponse.self, from: data)
-                completion(.success(authResponse))
+                let response = try JSONDecoder().decode(RegistrationResponse.self, from: data)
+                completion(.success(response))
             } catch {
                 completion(.failure(error))
             }
@@ -88,8 +113,20 @@ class APIService {
                 return
             }
 
-            guard let data = data else {
+            guard
+                let data = data,
+                let httpResponse = response as? HTTPURLResponse
+            else {
                 completion(.failure(NSError(domain: "NoData", code: -1)))
+                return
+            }
+
+            guard 200..<300 ~= httpResponse.statusCode else {
+                if let apiError = try? JSONDecoder().decode(APIErrorResponse.self, from: data) {
+                    completion(.failure(apiError))
+                } else {
+                    completion(.failure(NSError(domain: "ServerError", code: httpResponse.statusCode)))
+                }
                 return
             }
 
@@ -111,14 +148,26 @@ class APIService {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
 
-        URLSession.shared.dataTask(with: request) { data, _, error in
+        URLSession.shared.dataTask(with: request) { data, response, error in
             if let error = error {
                 completion(.failure(error))
                 return
             }
 
-            guard let data = data else {
+            guard
+                let data = data,
+                let httpResponse = response as? HTTPURLResponse
+            else {
                 completion(.failure(NSError(domain: "NoData", code: -1)))
+                return
+            }
+
+            guard 200..<300 ~= httpResponse.statusCode else {
+                if let apiError = try? JSONDecoder().decode(APIErrorResponse.self, from: data) {
+                    completion(.failure(apiError))
+                } else {
+                    completion(.failure(NSError(domain: "ServerError", code: httpResponse.statusCode)))
+                }
                 return
             }
 
@@ -180,20 +229,77 @@ class APIService {
 
         body.append("--\(boundary)--\r\n".data(using: .utf8)!)
 
-        URLSession.shared.uploadTask(with: request, from: body) { responseData, _, error in
+        URLSession.shared.uploadTask(with: request, from: body) { responseData, response, error in
             if let error = error {
                 completion(.failure(error))
                 return
             }
 
-            guard let responseData = responseData else {
+            guard
+                let responseData = responseData,
+                let httpResponse = response as? HTTPURLResponse
+            else {
                 completion(.failure(NSError(domain: "NoData", code: -1)))
+                return
+            }
+
+            guard 200..<300 ~= httpResponse.statusCode else {
+                if let apiError = try? JSONDecoder().decode(APIErrorResponse.self, from: responseData) {
+                    completion(.failure(apiError))
+                } else {
+                    completion(.failure(NSError(domain: "ServerError", code: httpResponse.statusCode)))
+                }
                 return
             }
 
             do {
                 let track = try JSONDecoder().decode(Track.self, from: responseData)
                 completion(.success(track))
+            } catch {
+                completion(.failure(error))
+            }
+        }.resume()
+    }
+
+    func verifyCode(userId: String, code: String, completion: @escaping (Result<AuthResponse, Error>) -> Void) {
+        guard let url = URL(string: "\(baseURL)/auth/verify") else { return }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let payload: [String: Any] = [
+            "userId": userId,
+            "code": code
+        ]
+        request.httpBody = try? JSONSerialization.data(withJSONObject: payload, options: [])
+
+        URLSession.shared.dataTask(with: request) { data, response, error in
+            if let error = error {
+                completion(.failure(error))
+                return
+            }
+
+            guard
+                let data = data,
+                let httpResponse = response as? HTTPURLResponse
+            else {
+                completion(.failure(NSError(domain: "NoData", code: -1)))
+                return
+            }
+
+            guard 200..<300 ~= httpResponse.statusCode else {
+                if let apiError = try? JSONDecoder().decode(APIErrorResponse.self, from: data) {
+                    completion(.failure(apiError))
+                } else {
+                    completion(.failure(NSError(domain: "ServerError", code: httpResponse.statusCode)))
+                }
+                return
+            }
+
+            do {
+                let auth = try JSONDecoder().decode(AuthResponse.self, from: data)
+                completion(.success(auth))
             } catch {
                 completion(.failure(error))
             }

@@ -14,6 +14,12 @@ struct AuthLandingView: View {
     @State private var displayName = ""
     @State private var statusMessage = ""
     @State private var isLoading = false
+    @State private var pendingUserId: String?
+    @State private var verificationEmail: String = ""
+    @State private var verificationCode: String = ""
+    @State private var verificationStatus: String = ""
+    @State private var isVerifyingCode = false
+    @State private var showVerificationSheet = false
 
     private let neonBlue = Color(red: 0.22, green: 0.64, blue: 0.98)
     private let deepPurple = Color(red: 0.15, green: 0.07, blue: 0.25)
@@ -129,6 +135,17 @@ struct AuthLandingView: View {
             }
             .padding()
         }
+        .sheet(isPresented: $showVerificationSheet) {
+            VerificationSheet(
+                email: verificationEmail,
+                code: $verificationCode,
+                statusMessage: verificationStatus,
+                isSubmitting: isVerifyingCode,
+                onSubmit: verifyPendingAccount
+            )
+            .presentationDetents([.medium])
+            .interactiveDismissDisabled(isVerifyingCode)
+        }
     }
 
     private func handleAuthAction() {
@@ -147,7 +164,7 @@ struct AuthLandingView: View {
                         self.session.saveSession(user: auth.user, accessToken: auth.accessToken, refreshToken: auth.refreshToken)
                         self.statusMessage = "Welcome back, \(auth.user.username)!"
                     case .failure(let error):
-                        self.statusMessage = "Login failed: \(error.localizedDescription)"
+                        self.handleAuthError(error, fallbackMessage: "Login failed")
                     }
                 }
             }
@@ -156,11 +173,11 @@ struct AuthLandingView: View {
                 DispatchQueue.main.async {
                     self.isLoading = false
                     switch result {
-                    case .success(let auth):
-                        self.session.saveSession(user: auth.user, accessToken: auth.accessToken, refreshToken: auth.refreshToken)
-                        self.statusMessage = "Welcome, \(auth.user.displayName)!"
+                    case .success(let response):
+                        self.presentVerificationState(userId: response.userId, email: self.email)
+                        self.statusMessage = "Verification required. Check \(self.email) for a code."
                     case .failure(let error):
-                        self.statusMessage = "Registration failed: \(error.localizedDescription)"
+                        self.handleAuthError(error, fallbackMessage: "Registration failed")
                     }
                 }
             }
@@ -181,6 +198,59 @@ struct AuthLandingView: View {
         }
 
         return true
+    }
+
+    private func handleAuthError(_ error: Error, fallbackMessage: String) {
+        if let apiError = error as? APIErrorResponse {
+            if apiError.error == "EMAIL_NOT_VERIFIED", let userId = apiError.userId {
+                presentVerificationState(userId: userId, email: email)
+                statusMessage = "Please verify your email to continue."
+            } else {
+                statusMessage = apiError.error
+            }
+        } else {
+            statusMessage = "\(fallbackMessage): \(error.localizedDescription)"
+        }
+    }
+
+    private func presentVerificationState(userId: String, email: String) {
+        pendingUserId = userId
+        verificationEmail = email
+        verificationCode = ""
+        verificationStatus = "Enter the 6-digit code sent to \(email)."
+        showVerificationSheet = true
+    }
+
+    private func verifyPendingAccount() {
+        guard let userId = pendingUserId else { return }
+        guard verificationCode.count == 6 else {
+            verificationStatus = "Enter the 6-digit code."
+            return
+        }
+
+        isVerifyingCode = true
+        verificationStatus = ""
+
+        APIService.shared.verifyCode(userId: userId, code: verificationCode) { result in
+            DispatchQueue.main.async {
+                self.isVerifyingCode = false
+                switch result {
+                case .success(let auth):
+                    self.session.saveSession(user: auth.user, accessToken: auth.accessToken, refreshToken: auth.refreshToken)
+                    self.showVerificationSheet = false
+                    self.pendingUserId = nil
+                    self.verificationEmail = ""
+                    self.verificationCode = ""
+                    self.statusMessage = "Account verified. Welcome, \(auth.user.displayName)!"
+                case .failure(let error):
+                    if let apiError = error as? APIErrorResponse {
+                        self.verificationStatus = apiError.error
+                    } else {
+                        self.verificationStatus = error.localizedDescription
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -232,5 +302,60 @@ private struct AuthInputField: View {
                 .frame(height: 48)
             }
         }
+    }
+}
+
+private struct VerificationSheet: View {
+    let email: String
+    @Binding var code: String
+    let statusMessage: String
+    let isSubmitting: Bool
+    let onSubmit: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            Text("Verify \(email)")
+                .font(.headline)
+
+            Text("We just sent a 6-digit code to your inbox. Enter it below to activate your account.")
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+
+            TextField("123456", text: $code)
+                .keyboardType(.numberPad)
+                .textContentType(.oneTimeCode)
+                .font(.system(size: 28, weight: .medium, design: .monospaced))
+                .multilineTextAlignment(.center)
+                .padding()
+                .background(Color(.secondarySystemBackground))
+                .cornerRadius(12)
+                .onChange(of: code) { newValue in
+                    let filtered = newValue.filter { $0.isNumber }
+                    code = String(filtered.prefix(6))
+                }
+
+            Button {
+                onSubmit()
+            } label: {
+                HStack {
+                    if isSubmitting {
+                        ProgressView()
+                    }
+                    Text("Verify Account")
+                }
+                .frame(maxWidth: .infinity)
+            }
+            .disabled(code.count != 6 || isSubmitting)
+            .padding()
+            .background(code.count == 6 && !isSubmitting ? Color.accentColor : Color.gray.opacity(0.5))
+            .foregroundColor(.white)
+            .cornerRadius(12)
+
+            Text(statusMessage)
+                .font(.footnote)
+                .foregroundColor(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding()
     }
 }
