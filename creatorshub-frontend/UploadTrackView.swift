@@ -4,156 +4,339 @@ import PhotosUI
 import UIKit
 
 struct UploadTrackView: View {
+    enum UploadStage: Int, CaseIterable {
+        case audio, cover, title, caption, success
+
+        var label: String {
+            switch self {
+            case .audio: return "Select Audio"
+            case .cover: return "Album Art"
+            case .title: return "Track Title"
+            case .caption: return "Caption"
+            case .success: return "Completed"
+            }
+        }
+    }
+
     @EnvironmentObject private var session: UserSession
-    @State private var title = ""
-    @State private var description = ""
-    @State private var caption = ""
+    @State private var stage: UploadStage = .audio
+
     @State private var selectedFileURL: URL?
     @State private var selectedCoverImage: UIImage?
     @State private var selectedPhotoItem: PhotosPickerItem?
-    @State private var resultText = ""
-    @State private var showFilePicker = false
+
+    @State private var title = ""
+    @State private var caption = ""
+
     @State private var isUploading = false
+    @State private var showFilePicker = false
+    @State private var statusMessage: String?
+    @State private var uploadedTrackTitle: String?
+
+    private let captionLimit = 150
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Upload Track")
-                .font(.headline)
-
-            TextField("Track Title", text: $title)
-                .textFieldStyle(RoundedBorderTextFieldStyle())
-
-            TextField("Description (optional)", text: $description, axis: .vertical)
-                .textFieldStyle(RoundedBorderTextFieldStyle())
-            VStack(alignment: .leading, spacing: 4) {
-                TextField("Caption (max 150 chars)", text: $caption, axis: .vertical)
-                    .textFieldStyle(RoundedBorderTextFieldStyle())
-                    .onChange(of: caption) { newValue in
-                        if newValue.count > 150 {
-                            caption = String(newValue.prefix(150))
-                        }
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 24) {
+                    if stage != .success {
+                        progressHeader
                     }
-                Text("\(caption.count)/150")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                    stageContent()
+                    if let statusMessage = statusMessage {
+                        Text(statusMessage)
+                            .font(.footnote)
+                            .foregroundColor(.secondary)
+                            .padding(.top, 8)
+                    }
+                }
+                .padding(.horizontal)
+                .padding(.vertical, 32)
             }
-
-            VStack(alignment: .leading, spacing: 8) {
-                Button {
-                    showFilePicker = true
-                } label: {
-                    HStack {
-                        Image(systemName: "music.note")
-                        Text(selectedFileURL?.lastPathComponent ?? "Pick Audio File")
+            .background(Color(uiColor: .systemGroupedBackground))
+            .navigationTitle("Upload")
+            .toolbar {
+                if stage != .audio && stage != .success {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button("Back") { goToPreviousStage() }
                     }
-                }
-
-                PhotosPicker(selection: $selectedPhotoItem, matching: .images) {
-                    HStack {
-                        Image(systemName: "photo")
-                        Text(selectedCoverImage == nil ? "Pick Cover Image (optional)" : "Change Cover Image")
-                    }
-                }
-                .onChange(of: selectedPhotoItem) { newValue in
-                    guard let item = newValue else {
-                        selectedCoverImage = nil
-                        return
-                    }
-
-                    Task {
-                        await loadImage(from: item)
-                    }
-                }
-
-                if let image = selectedCoverImage {
-                    Image(uiImage: image)
-                        .resizable()
-                        .scaledToFit()
-                        .frame(height: 150)
-                        .cornerRadius(10)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 10)
-                                .stroke(Color.secondary, lineWidth: 1)
-                        )
                 }
             }
-
-            Button {
-                uploadTrack()
-            } label: {
-                HStack {
-                    if isUploading {
-                        ProgressView()
-                    }
-                    Text(isUploading ? "Uploading..." : "Upload Track")
-                }
-                .frame(maxWidth: .infinity)
-            }
-            .disabled(isUploading)
-            .padding()
-            .background(isUploading ? Color.gray.opacity(0.4) : Color.accentColor)
-            .foregroundColor(.white)
-            .cornerRadius(8)
-
-            Text(resultText)
-                .font(.subheadline)
-                .foregroundColor(.secondary)
-
         }
         .sheet(isPresented: $showFilePicker) {
             DocumentPicker(selectedURL: $selectedFileURL)
         }
+        .onChange(of: selectedFileURL) { newValue in
+            guard newValue != nil else { return }
+            withAnimation { stage = .cover }
+        }
+        .onChange(of: selectedPhotoItem) { newValue in
+            guard let item = newValue else { selectedCoverImage = nil; return }
+            Task { await loadImage(from: item) }
+        }
     }
 
-    private func uploadTrack() {
+    private var progressHeader: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(stage.label)
+                .font(.title3).bold()
+            ProgressView(value: progressValue)
+                .tint(.blue)
+        }
+    }
+
+    private var progressValue: Double {
+        let maxStage = UploadStage.caption.rawValue
+        let current = min(stage.rawValue, maxStage)
+        return Double(current + 1) / Double(maxStage + 1)
+    }
+
+    @ViewBuilder
+    private func stageContent() -> some View {
+        switch stage {
+        case .audio:
+            audioStage
+        case .cover:
+            coverStage
+        case .title:
+            titleStage
+        case .caption:
+            captionStage
+        case .success:
+            successStage
+        }
+    }
+
+    private var audioStage: some View {
+        VStack(spacing: 16) {
+            Button {
+                showFilePicker = true
+            } label: {
+                VStack(spacing: 12) {
+                    Image(systemName: selectedFileURL == nil ? "square.and.arrow.up" : "checkmark.circle.fill")
+                        .font(.system(size: 44))
+                        .foregroundColor(.white)
+                        .padding()
+                        .background(
+                            LinearGradient(colors: [.blue, .purple], startPoint: .topLeading, endPoint: .bottomTrailing)
+                                .cornerRadius(18)
+                        )
+                    Text(selectedFileURL == nil ? "Upload Audio" : "Replace Audio")
+                        .font(.headline)
+                        .foregroundColor(.primary)
+                    if let url = selectedFileURL {
+                        Text(url.lastPathComponent)
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                            .lineLimit(2)
+                    } else {
+                        Text("Supported formats: MP3, M4A, WAV")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                .padding()
+                .frame(maxWidth: .infinity)
+                .background(Color.white)
+                .cornerRadius(24)
+                .shadow(color: Color.black.opacity(0.05), radius: 20, y: 10)
+            }
+        }
+    }
+
+    private var coverStage: some View {
+        VStack(spacing: 20) {
+            Group {
+                if let image = selectedCoverImage {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFill()
+                } else {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 24, style: .continuous)
+                            .fill(Color.secondary.opacity(0.1))
+                        VStack(spacing: 8) {
+                            Image(systemName: "photo")
+                                .font(.system(size: 32))
+                            Text("Optional album art")
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
+            }
+            .frame(height: 220)
+            .cornerRadius(24)
+            .clipped()
+
+            HStack(spacing: 12) {
+                PhotosPicker(selection: $selectedPhotoItem, matching: .images) {
+                    Label(selectedCoverImage == nil ? "Add Photo" : "Change Photo", systemImage: "photo.on.rectangle")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+
+                Button(selectedCoverImage == nil ? "Skip" : "Continue") {
+                    withAnimation { stage = .title }
+                }
+                .buttonStyle(.bordered)
+            }
+        }
+    }
+
+    private var titleStage: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Text("Give your track a name")
+                .font(.headline)
+            TextField("Title (required)", text: $title)
+                .textFieldStyle(.roundedBorder)
+                .font(.title3)
+
+            Button {
+                withAnimation { stage = .caption }
+            } label: {
+                Text("Continue")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        }
+    }
+
+    private var captionStage: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Caption (optional)")
+                .font(.headline)
+
+            ZStack(alignment: .topLeading) {
+                RoundedRectangle(cornerRadius: 18)
+                    .fill(Color.white)
+                    .shadow(color: Color.black.opacity(0.05), radius: 10, y: 4)
+
+                TextEditor(text: $caption)
+                    .padding()
+                    .frame(height: 140)
+                    .onChange(of: caption) { newValue in
+                        if newValue.count > captionLimit {
+                            caption = String(newValue.prefix(captionLimit))
+                        }
+                    }
+            }
+
+            HStack {
+                Text("\(caption.count)/\(captionLimit)")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                Spacer()
+            }
+
+            Button {
+                completeUpload()
+            } label: {
+                HStack {
+                    if isUploading { ProgressView() }
+                    Text(isUploading ? "Publishing…" : "Complete Post")
+                        .bold()
+                }
+                .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(!canPublish || isUploading)
+        }
+    }
+
+    private var successStage: some View {
+        VStack(spacing: 24) {
+            Image(systemName: "sparkles")
+                .font(.system(size: 60))
+                .foregroundColor(.yellow)
+            Text("Track Live!")
+                .font(.largeTitle.bold())
+            if let title = uploadedTrackTitle {
+                Text("“\(title)” is now visible in the feed.")
+                    .multilineTextAlignment(.center)
+                    .foregroundColor(.secondary)
+            }
+            Button("Share another track") {
+                resetFlow()
+            }
+            .buttonStyle(.borderedProminent)
+        }
+        .frame(maxWidth: .infinity)
+        .padding()
+        .background(Color.white)
+        .cornerRadius(28)
+        .shadow(color: Color.black.opacity(0.05), radius: 20, y: 10)
+    }
+
+    private var canPublish: Bool {
+        guard selectedFileURL != nil else { return false }
+        return !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func goToPreviousStage() {
+        switch stage {
+        case .cover: stage = .audio
+        case .title: stage = selectedCoverImage == nil ? .cover : .cover
+        case .caption: stage = .title
+        default: break
+        }
+    }
+
+    private func completeUpload() {
         guard let fileURL = selectedFileURL else {
-            resultText = "Please pick an audio file first."
+            statusMessage = "Select an audio file first."
             return
         }
 
         guard let token = session.accessToken else {
-            resultText = "Log in to upload tracks."
+            statusMessage = "Log in to upload."
             return
         }
 
-        if title.trimmingCharacters(in: .whitespaces).isEmpty {
-            resultText = "Title is required."
+        let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedTitle.isEmpty else {
+            statusMessage = "Title is required."
             return
         }
 
         isUploading = true
-        resultText = ""
+        statusMessage = nil
 
-        let coverData = selectedCoverImage?.jpegData(compressionQuality: 0.85)
-
+        let coverData = selectedCoverImage?.jpegData(compressionQuality: 0.9)
         APIService.shared.uploadTrack(
             fileURL: fileURL,
-            title: title,
-            description: description,
-            caption: caption,
+            title: trimmedTitle,
+            description: "",
+            caption: caption.trimmingCharacters(in: .whitespacesAndNewlines),
             coverImageData: coverData,
             accessToken: token
         ) { result in
             DispatchQueue.main.async {
-                isUploading = false
+                self.isUploading = false
                 switch result {
-                case .success(let track):
-                    resultText = "Uploaded: \(track.title) (ID: \(track.trackId))"
-                    resetForm()
+                case .success(let response):
+                    self.uploadedTrackTitle = response.title
+                    NotificationCenter.default.post(name: .trackUploaded, object: nil)
+                    withAnimation {
+                        self.stage = .success
+                    }
                 case .failure(let error):
-                    resultText = "Upload failed: \(error.localizedDescription)"
+                    self.statusMessage = "Upload failed: \(error.localizedDescription)"
                 }
             }
         }
     }
 
-    private func resetForm() {
-        title = ""
-        description = ""
-        caption = ""
+    private func resetFlow() {
+        stage = .audio
         selectedFileURL = nil
         selectedCoverImage = nil
         selectedPhotoItem = nil
+        title = ""
+        caption = ""
+        uploadedTrackTitle = nil
+        statusMessage = nil
     }
 
     private func loadImage(from item: PhotosPickerItem) async {
@@ -166,11 +349,12 @@ struct UploadTrackView: View {
             }
         } catch {
             await MainActor.run {
-                resultText = "Failed to load cover image."
+                statusMessage = "Failed to load image."
             }
         }
     }
 }
+
 
 struct DocumentPicker: UIViewControllerRepresentable {
     @Binding var selectedURL: URL?

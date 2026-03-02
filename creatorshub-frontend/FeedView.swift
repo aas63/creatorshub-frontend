@@ -56,6 +56,9 @@ struct FeedView: View {
                 hasLoaded = true
                 loadFeed()
             }
+            .onReceive(NotificationCenter.default.publisher(for: .trackUploaded)) { _ in
+                loadFeed(showSpinner: false)
+            }
         }
     }
 
@@ -88,6 +91,10 @@ struct FeedView: View {
             }
         }
     }
+}
+
+extension Notification.Name {
+    static let trackUploaded = Notification.Name("trackUploaded")
 }
 
 struct FeedPostView: View {
