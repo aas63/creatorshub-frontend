@@ -5,10 +5,10 @@ struct MainTabView: View {
 
     var body: some View {
         TabView {
-            HomeFeedView()
+            FeedView()
                 .tabItem {
                     Image(systemName: "house")
-                    Text("Home")
+                    Text("Feed")
                 }
 
             UploadTrackView()

@@ -27,23 +27,66 @@ struct APIErrorResponse: Codable, LocalizedError {
     var errorDescription: String? { error }
 }
 
-struct Track: Codable {
+struct TrackUserReference: Codable {
+    let id: String
+    let username: String
+    let displayName: String
+}
+
+struct FeedTrack: Codable, Identifiable {
+    let trackId: String
+    var id: String { trackId }
+    let userId: String
+    let title: String
+    let description: String?
+    let caption: String?
+    let fileUrl: String
+    let coverImageUrl: String?
+    let createdAt: Date
+    var likesCount: Int
+    var commentsCount: Int
+    var likedByMe: Bool
+    let user: TrackUserReference
+}
+
+struct TrackUploadResponse: Codable {
     let trackId: String
     let userId: String
     let title: String
     let description: String?
+    let caption: String?
     let fileUrl: String
     let coverImageUrl: String?
+    let createdAt: Date?
+}
+
+struct Comment: Codable, Identifiable {
+    let id: String
+    let trackId: String
+    let text: String
+    let createdAt: Date
+    let user: TrackUserReference
+}
+
+struct TrackDetailResponse: Codable {
+    let track: FeedTrack
+    let comments: [Comment]
 }
 
 class APIService {
     static let shared = APIService()
-    private let baseURL = "http://localhost:3000"
+    let baseURL = "http://localhost:3000"
+    private let decoder: JSONDecoder
 
-    private init() {}
+    private init() {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        self.decoder = decoder
+    }
 
     // MARK: - Register
     func register(email: String, password: String, username: String, displayName: String, completion: @escaping (Result<RegistrationResponse, Error>) -> Void) {
+        let decoder = self.decoder
 
         guard let url = URL(string: "\(baseURL)/auth/register") else { return }
 
@@ -75,7 +118,7 @@ class APIService {
             }
 
             guard 200..<300 ~= httpResponse.statusCode else {
-                if let apiError = try? JSONDecoder().decode(APIErrorResponse.self, from: data) {
+                if let apiError = try? self.decoder.decode(APIErrorResponse.self, from: data) {
                     completion(.failure(apiError))
                 } else {
                     completion(.failure(NSError(domain: "ServerError", code: httpResponse.statusCode)))
@@ -84,7 +127,7 @@ class APIService {
             }
 
             do {
-                let response = try JSONDecoder().decode(RegistrationResponse.self, from: data)
+                let response = try self.decoder.decode(RegistrationResponse.self, from: data)
                 completion(.success(response))
             } catch {
                 completion(.failure(error))
@@ -94,6 +137,7 @@ class APIService {
 
     // MARK: - Login
     func login(email: String, password: String, completion: @escaping (Result<AuthResponse, Error>) -> Void) {
+        let decoder = self.decoder
         guard let url = URL(string: "\(baseURL)/auth/login") else { return }
 
         var request = URLRequest(url: url)
@@ -122,7 +166,7 @@ class APIService {
             }
 
             guard 200..<300 ~= httpResponse.statusCode else {
-                if let apiError = try? JSONDecoder().decode(APIErrorResponse.self, from: data) {
+                if let apiError = try? self.decoder.decode(APIErrorResponse.self, from: data) {
                     completion(.failure(apiError))
                 } else {
                     completion(.failure(NSError(domain: "ServerError", code: httpResponse.statusCode)))
@@ -131,7 +175,7 @@ class APIService {
             }
 
             do {
-                let authResponse = try JSONDecoder().decode(AuthResponse.self, from: data)
+                let authResponse = try self.decoder.decode(AuthResponse.self, from: data)
                 completion(.success(authResponse))
             } catch {
                 completion(.failure(error))
@@ -141,6 +185,7 @@ class APIService {
 
     // MARK: - Current User
     func getCurrentUser(accessToken: String, completion: @escaping (Result<User, Error>) -> Void) {
+        let decoder = self.decoder
         guard let url = URL(string: "\(baseURL)/users/me") else { return }
 
         var request = URLRequest(url: url)
@@ -148,7 +193,7 @@ class APIService {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
 
-        URLSession.shared.dataTask(with: request) { data, response, error in
+        URLSession.shared.dataTask(with: request) { [self] data, response, error in
             if let error = error {
                 completion(.failure(error))
                 return
@@ -163,7 +208,7 @@ class APIService {
             }
 
             guard 200..<300 ~= httpResponse.statusCode else {
-                if let apiError = try? JSONDecoder().decode(APIErrorResponse.self, from: data) {
+                if let apiError = try? self.decoder.decode(APIErrorResponse.self, from: data) {
                     completion(.failure(apiError))
                 } else {
                     completion(.failure(NSError(domain: "ServerError", code: httpResponse.statusCode)))
@@ -172,7 +217,7 @@ class APIService {
             }
 
             do {
-                let user = try JSONDecoder().decode(User.self, from: data)
+                let user = try decoder.decode(User.self, from: data)
                 completion(.success(user))
             } catch {
                 completion(.failure(error))
@@ -185,10 +230,12 @@ class APIService {
         fileURL: URL,
         title: String,
         description: String,
+        caption: String,
         coverImageData: Data?,
         accessToken: String,
-        completion: @escaping (Result<Track, Error>) -> Void
+        completion: @escaping (Result<TrackUploadResponse, Error>) -> Void
     ) {
+        let decoder = self.decoder
         guard let url = URL(string: "\(baseURL)/tracks/upload") else { return }
 
         var request = URLRequest(url: url)
@@ -201,6 +248,7 @@ class APIService {
         var body = Data()
         appendTextField(data: &body, name: "title", value: title, boundary: boundary)
         appendTextField(data: &body, name: "description", value: description, boundary: boundary)
+        appendTextField(data: &body, name: "caption", value: caption, boundary: boundary)
 
         guard let fileData = try? Data(contentsOf: fileURL) else {
             completion(.failure(NSError(domain: "FileRead", code: -1)))
@@ -229,7 +277,7 @@ class APIService {
 
         body.append("--\(boundary)--\r\n".data(using: .utf8)!)
 
-        URLSession.shared.uploadTask(with: request, from: body) { responseData, response, error in
+        URLSession.shared.uploadTask(with: request, from: body) { [self] responseData, response, error in
             if let error = error {
                 completion(.failure(error))
                 return
@@ -244,7 +292,7 @@ class APIService {
             }
 
             guard 200..<300 ~= httpResponse.statusCode else {
-                if let apiError = try? JSONDecoder().decode(APIErrorResponse.self, from: responseData) {
+                if let apiError = try? decoder.decode(APIErrorResponse.self, from: responseData) {
                     completion(.failure(apiError))
                 } else {
                     completion(.failure(NSError(domain: "ServerError", code: httpResponse.statusCode)))
@@ -253,7 +301,7 @@ class APIService {
             }
 
             do {
-                let track = try JSONDecoder().decode(Track.self, from: responseData)
+                let track = try decoder.decode(TrackUploadResponse.self, from: responseData)
                 completion(.success(track))
             } catch {
                 completion(.failure(error))
@@ -262,6 +310,7 @@ class APIService {
     }
 
     func verifyCode(userId: String, code: String, completion: @escaping (Result<AuthResponse, Error>) -> Void) {
+        let decoder = self.decoder
         guard let url = URL(string: "\(baseURL)/auth/verify") else { return }
 
         var request = URLRequest(url: url)
@@ -272,6 +321,180 @@ class APIService {
             "userId": userId,
             "code": code
         ]
+        request.httpBody = try? JSONSerialization.data(withJSONObject: payload, options: [])
+
+        URLSession.shared.dataTask(with: request) { [self] data, response, error in
+            if let error = error {
+                completion(.failure(error))
+                return
+            }
+
+            guard
+                let data = data,
+                let httpResponse = response as? HTTPURLResponse
+            else {
+                completion(.failure(NSError(domain: "NoData", code: -1)))
+                return
+            }
+
+            guard 200..<300 ~= httpResponse.statusCode else {
+                if let apiError = try? decoder.decode(APIErrorResponse.self, from: data) {
+                    completion(.failure(apiError))
+                } else {
+                    completion(.failure(NSError(domain: "ServerError", code: httpResponse.statusCode)))
+                }
+                return
+            }
+
+            do {
+                let auth = try decoder.decode(AuthResponse.self, from: data)
+                completion(.success(auth))
+            } catch {
+                completion(.failure(error))
+            }
+        }.resume()
+    }
+
+    // MARK: - Feed
+    func fetchFeed(accessToken: String, completion: @escaping (Result<[FeedTrack], Error>) -> Void) {
+        let decoder = self.decoder
+        guard let url = URL(string: "\(baseURL)/tracks") else { return }
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+
+        URLSession.shared.dataTask(with: request) { data, response, error in
+            if let error = error {
+                completion(.failure(error))
+                return
+            }
+
+            guard
+                let data = data,
+                let httpResponse = response as? HTTPURLResponse
+            else {
+                completion(.failure(NSError(domain: "NoData", code: -1)))
+                return
+            }
+
+            guard 200..<300 ~= httpResponse.statusCode else {
+                if let apiError = try? decoder.decode(APIErrorResponse.self, from: data) {
+                    completion(.failure(apiError))
+                } else {
+                    completion(.failure(NSError(domain: "ServerError", code: httpResponse.statusCode)))
+                }
+                return
+            }
+
+            do {
+                let tracks = try decoder.decode([FeedTrack].self, from: data)
+                completion(.success(tracks))
+            } catch {
+                completion(.failure(error))
+            }
+        }.resume()
+    }
+
+    func fetchTrackDetail(trackId: String, accessToken: String, completion: @escaping (Result<TrackDetailResponse, Error>) -> Void) {
+        let decoder = self.decoder
+        guard let url = URL(string: "\(baseURL)/tracks/\(trackId)") else { return }
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+
+        URLSession.shared.dataTask(with: request) { data, response, error in
+            if let error = error {
+                completion(.failure(error))
+                return
+            }
+
+            guard
+                let data = data,
+                let httpResponse = response as? HTTPURLResponse
+            else {
+                completion(.failure(NSError(domain: "NoData", code: -1)))
+                return
+            }
+
+            guard 200..<300 ~= httpResponse.statusCode else {
+                if let apiError = try? decoder.decode(APIErrorResponse.self, from: data) {
+                    completion(.failure(apiError))
+                } else {
+                    completion(.failure(NSError(domain: "ServerError", code: httpResponse.statusCode)))
+                }
+                return
+            }
+
+            do {
+                let detail = try decoder.decode(TrackDetailResponse.self, from: data)
+                completion(.success(detail))
+            } catch {
+                completion(.failure(error))
+            }
+        }.resume()
+    }
+
+    func likeTrack(trackId: String, accessToken: String, completion: @escaping (Result<Void, Error>) -> Void) {
+        guard let url = URL(string: "\(baseURL)/tracks/\(trackId)/like") else { return }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+
+        URLSession.shared.dataTask(with: request) { _, response, error in
+            if let error = error {
+                completion(.failure(error))
+                return
+            }
+
+            guard let httpResponse = response as? HTTPURLResponse else {
+                completion(.failure(NSError(domain: "NoResponse", code: -1)))
+                return
+            }
+
+            guard 200..<300 ~= httpResponse.statusCode else {
+                completion(.failure(NSError(domain: "ServerError", code: httpResponse.statusCode)))
+                return
+            }
+
+            completion(.success(()))
+        }.resume()
+    }
+
+    func unlikeTrack(trackId: String, accessToken: String, completion: @escaping (Result<Void, Error>) -> Void) {
+        guard let url = URL(string: "\(baseURL)/tracks/\(trackId)/like") else { return }
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+
+        URLSession.shared.dataTask(with: request) { _, response, error in
+            if let error = error {
+                completion(.failure(error))
+                return
+            }
+
+            guard let httpResponse = response as? HTTPURLResponse else {
+                completion(.failure(NSError(domain: "NoResponse", code: -1)))
+                return
+            }
+
+            guard 200..<300 ~= httpResponse.statusCode else {
+                completion(.failure(NSError(domain: "ServerError", code: httpResponse.statusCode)))
+                return
+            }
+
+            completion(.success(()))
+        }.resume()
+    }
+
+    func addComment(trackId: String, text: String, accessToken: String, completion: @escaping (Result<Comment, Error>) -> Void) {
+        let decoder = self.decoder
+        guard let url = URL(string: "\(baseURL)/tracks/\(trackId)/comments") else { return }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+
+        let payload = ["text": text]
         request.httpBody = try? JSONSerialization.data(withJSONObject: payload, options: [])
 
         URLSession.shared.dataTask(with: request) { data, response, error in
@@ -289,7 +512,7 @@ class APIService {
             }
 
             guard 200..<300 ~= httpResponse.statusCode else {
-                if let apiError = try? JSONDecoder().decode(APIErrorResponse.self, from: data) {
+                if let apiError = try? decoder.decode(APIErrorResponse.self, from: data) {
                     completion(.failure(apiError))
                 } else {
                     completion(.failure(NSError(domain: "ServerError", code: httpResponse.statusCode)))
@@ -298,8 +521,8 @@ class APIService {
             }
 
             do {
-                let auth = try JSONDecoder().decode(AuthResponse.self, from: data)
-                completion(.success(auth))
+                let comment = try decoder.decode(Comment.self, from: data)
+                completion(.success(comment))
             } catch {
                 completion(.failure(error))
             }

@@ -7,6 +7,7 @@ struct UploadTrackView: View {
     @EnvironmentObject private var session: UserSession
     @State private var title = ""
     @State private var description = ""
+    @State private var caption = ""
     @State private var selectedFileURL: URL?
     @State private var selectedCoverImage: UIImage?
     @State private var selectedPhotoItem: PhotosPickerItem?
@@ -24,6 +25,18 @@ struct UploadTrackView: View {
 
             TextField("Description (optional)", text: $description, axis: .vertical)
                 .textFieldStyle(RoundedBorderTextFieldStyle())
+            VStack(alignment: .leading, spacing: 4) {
+                TextField("Caption (max 150 chars)", text: $caption, axis: .vertical)
+                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                    .onChange(of: caption) { newValue in
+                        if newValue.count > 150 {
+                            caption = String(newValue.prefix(150))
+                        }
+                    }
+                Text("\(caption.count)/150")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
 
             VStack(alignment: .leading, spacing: 8) {
                 Button {
@@ -117,6 +130,7 @@ struct UploadTrackView: View {
             fileURL: fileURL,
             title: title,
             description: description,
+            caption: caption,
             coverImageData: coverData,
             accessToken: token
         ) { result in
@@ -136,6 +150,7 @@ struct UploadTrackView: View {
     private func resetForm() {
         title = ""
         description = ""
+        caption = ""
         selectedFileURL = nil
         selectedCoverImage = nil
         selectedPhotoItem = nil
