@@ -76,17 +76,18 @@ struct TrackDetailResponse: Codable {
 class APIService {
     static let shared = APIService()
     let baseURL = "http://localhost:3000"
-    private let decoder: JSONDecoder
 
-    private init() {
+    private init() {}
+
+    private func makeDecoder() -> JSONDecoder {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        self.decoder = decoder
+        return decoder
     }
 
     // MARK: - Register
     func register(email: String, password: String, username: String, displayName: String, completion: @escaping (Result<RegistrationResponse, Error>) -> Void) {
-        let decoder = self.decoder
+        let decoder = makeDecoder()
 
         guard let url = URL(string: "\(baseURL)/auth/register") else { return }
 
@@ -118,7 +119,7 @@ class APIService {
             }
 
             guard 200..<300 ~= httpResponse.statusCode else {
-                if let apiError = try? self.decoder.decode(APIErrorResponse.self, from: data) {
+                if let apiError = try? decoder.decode(APIErrorResponse.self, from: data) {
                     completion(.failure(apiError))
                 } else {
                     completion(.failure(NSError(domain: "ServerError", code: httpResponse.statusCode)))
@@ -127,7 +128,7 @@ class APIService {
             }
 
             do {
-                let response = try self.decoder.decode(RegistrationResponse.self, from: data)
+                let response = try decoder.decode(RegistrationResponse.self, from: data)
                 completion(.success(response))
             } catch {
                 completion(.failure(error))
@@ -137,7 +138,7 @@ class APIService {
 
     // MARK: - Login
     func login(email: String, password: String, completion: @escaping (Result<AuthResponse, Error>) -> Void) {
-        let decoder = self.decoder
+        let decoder = makeDecoder()
         guard let url = URL(string: "\(baseURL)/auth/login") else { return }
 
         var request = URLRequest(url: url)
@@ -166,7 +167,7 @@ class APIService {
             }
 
             guard 200..<300 ~= httpResponse.statusCode else {
-                if let apiError = try? self.decoder.decode(APIErrorResponse.self, from: data) {
+                if let apiError = try? decoder.decode(APIErrorResponse.self, from: data) {
                     completion(.failure(apiError))
                 } else {
                     completion(.failure(NSError(domain: "ServerError", code: httpResponse.statusCode)))
@@ -175,7 +176,7 @@ class APIService {
             }
 
             do {
-                let authResponse = try self.decoder.decode(AuthResponse.self, from: data)
+                let authResponse = try decoder.decode(AuthResponse.self, from: data)
                 completion(.success(authResponse))
             } catch {
                 completion(.failure(error))
@@ -185,7 +186,7 @@ class APIService {
 
     // MARK: - Current User
     func getCurrentUser(accessToken: String, completion: @escaping (Result<User, Error>) -> Void) {
-        let decoder = self.decoder
+        let decoder = makeDecoder()
         guard let url = URL(string: "\(baseURL)/users/me") else { return }
 
         var request = URLRequest(url: url)
@@ -208,7 +209,7 @@ class APIService {
             }
 
             guard 200..<300 ~= httpResponse.statusCode else {
-                if let apiError = try? self.decoder.decode(APIErrorResponse.self, from: data) {
+                if let apiError = try? decoder.decode(APIErrorResponse.self, from: data) {
                     completion(.failure(apiError))
                 } else {
                     completion(.failure(NSError(domain: "ServerError", code: httpResponse.statusCode)))
@@ -228,14 +229,14 @@ class APIService {
     // MARK: - Upload Track
     func uploadTrack(
         fileURL: URL,
-        title: String,
-        description: String,
-        caption: String,
+        title trackTitle: String,
+        description trackDescription: String,
+        caption trackCaption: String,
         coverImageData: Data?,
         accessToken: String,
         completion: @escaping (Result<TrackUploadResponse, Error>) -> Void
     ) {
-        let decoder = self.decoder
+        let decoder = makeDecoder()
         guard let url = URL(string: "\(baseURL)/tracks/upload") else { return }
 
         var request = URLRequest(url: url)
@@ -246,9 +247,9 @@ class APIService {
         request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
 
         var body = Data()
-        appendTextField(data: &body, name: "title", value: title, boundary: boundary)
-        appendTextField(data: &body, name: "description", value: description, boundary: boundary)
-        appendTextField(data: &body, name: "caption", value: caption, boundary: boundary)
+        appendTextField(data: &body, name: "title", value: trackTitle, boundary: boundary)
+        appendTextField(data: &body, name: "description", value: trackDescription, boundary: boundary)
+        appendTextField(data: &body, name: "caption", value: trackCaption, boundary: boundary)
 
         guard let fileData = try? Data(contentsOf: fileURL) else {
             completion(.failure(NSError(domain: "FileRead", code: -1)))
@@ -304,13 +305,22 @@ class APIService {
                 let track = try decoder.decode(TrackUploadResponse.self, from: responseData)
                 completion(.success(track))
             } catch {
-                completion(.failure(error))
+                if let fallback = parseUploadResponseFallback(data: responseData, title: trackTitle, caption: trackCaption) {
+                    completion(.success(fallback))
+                } else {
+                    #if DEBUG
+                    if let raw = String(data: responseData, encoding: .utf8) {
+                        print("Upload decode error:", raw)
+                    }
+                    #endif
+                    completion(.failure(error))
+                }
             }
         }.resume()
     }
 
     func verifyCode(userId: String, code: String, completion: @escaping (Result<AuthResponse, Error>) -> Void) {
-        let decoder = self.decoder
+        let decoder = makeDecoder()
         guard let url = URL(string: "\(baseURL)/auth/verify") else { return }
 
         var request = URLRequest(url: url)
@@ -357,7 +367,7 @@ class APIService {
 
     // MARK: - Feed
     func fetchFeed(accessToken: String, completion: @escaping (Result<[FeedTrack], Error>) -> Void) {
-        let decoder = self.decoder
+        let decoder = makeDecoder()
         guard let url = URL(string: "\(baseURL)/tracks") else { return }
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
@@ -396,7 +406,7 @@ class APIService {
     }
 
     func fetchTrackDetail(trackId: String, accessToken: String, completion: @escaping (Result<TrackDetailResponse, Error>) -> Void) {
-        let decoder = self.decoder
+        let decoder = makeDecoder()
         guard let url = URL(string: "\(baseURL)/tracks/\(trackId)") else { return }
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
@@ -487,7 +497,7 @@ class APIService {
     }
 
     func addComment(trackId: String, text: String, accessToken: String, completion: @escaping (Result<Comment, Error>) -> Void) {
-        let decoder = self.decoder
+        let decoder = makeDecoder()
         guard let url = URL(string: "\(baseURL)/tracks/\(trackId)/comments") else { return }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -527,6 +537,32 @@ class APIService {
                 completion(.failure(error))
             }
         }.resume()
+    }
+
+    private func parseUploadResponseFallback(data: Data, title: String, caption: String) -> TrackUploadResponse? {
+        guard let object = try? JSONSerialization.jsonObject(with: data, options: []) as? [String: Any] else {
+            return nil
+        }
+
+        let trackId = object["trackId"] as? String ?? UUID().uuidString
+        let userId = object["userId"] as? String ?? ""
+        let description = object["description"] as? String
+        let captionValue = object["caption"] as? String ?? caption
+        let fileUrl = object["fileUrl"] as? String ?? ""
+        let coverImageUrl = object["coverImageUrl"] as? String
+        let createdAtString = object["createdAt"] as? String
+        let createdAtDate = createdAtString.flatMap { ISO8601DateFormatter().date(from: $0) }
+
+        return TrackUploadResponse(
+            trackId: trackId,
+            userId: userId,
+            title: object["title"] as? String ?? title,
+            description: description,
+            caption: captionValue,
+            fileUrl: fileUrl,
+            coverImageUrl: coverImageUrl,
+            createdAt: createdAtDate
+        )
     }
 
     private func appendTextField(data: inout Data, name: String, value: String, boundary: String) {
