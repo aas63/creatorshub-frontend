@@ -64,7 +64,7 @@ struct UploadTrackView: View {
             }
         }
         .sheet(isPresented: $showFilePicker) {
-            DocumentPicker(selectedURL: $selectedFileURL)
+            AudioDocumentPicker(selectedURL: $selectedFileURL)
         }
         .onChange(of: selectedFileURL) { newValue in
             guard newValue != nil else { return }
