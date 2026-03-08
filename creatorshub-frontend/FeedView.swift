@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct FeedView: View {
     @EnvironmentObject private var session: UserSession
@@ -99,9 +100,23 @@ extension Notification.Name {
 
 struct FeedPostView: View {
     let track: FeedTrack
+    @ObservedObject private var audio = FeedAudioManager.shared
 
     private var coverURL: URL? {
         absoluteURL(for: track.coverImageUrl)
+    }
+
+    private var audioURL: URL? {
+        absoluteURL(for: track.fileUrl)
+    }
+
+    private var isActive: Bool {
+        audio.activeTrackId == track.trackId
+    }
+
+    private var isMutedForActiveTrack: Bool {
+        guard isActive else { return true }
+        return audio.isMuted
     }
 
     var body: some View {
@@ -136,31 +151,96 @@ struct FeedPostView: View {
                 }
             }
 
-            if let coverURL = coverURL {
-                AsyncImage(url: coverURL) { phase in
-                    switch phase {
-                    case .empty:
-                        ZStack {
+            ZStack(alignment: .bottomLeading) {
+                if let coverURL = coverURL {
+                    AsyncImage(url: coverURL) { phase in
+                        switch phase {
+                        case .empty:
+                            ZStack {
+                                Rectangle()
+                                    .fill(Color.secondary.opacity(0.1))
+                                ProgressView()
+                            }
+                        case .success(let image):
+                            image
+                                .resizable()
+                                .scaledToFill()
+                        case .failure:
                             Rectangle()
                                 .fill(Color.secondary.opacity(0.1))
-                            ProgressView()
+                                .overlay(Image(systemName: "photo").foregroundColor(.secondary))
+                        @unknown default:
+                            EmptyView()
                         }
-                    case .success(let image):
-                        image
-                            .resizable()
-                            .scaledToFill()
-                    case .failure:
-                        Rectangle()
-                            .fill(Color.secondary.opacity(0.1))
-                            .overlay(Image(systemName: "photo").foregroundColor(.secondary))
-                    @unknown default:
-                        EmptyView()
                     }
+                } else {
+                    Rectangle()
+                        .fill(
+                            LinearGradient(
+                                colors: [.purple.opacity(0.6), .black.opacity(0.7)],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                        .overlay(
+                            Image(systemName: "waveform.circle")
+                                .font(.system(size: 64))
+                                .foregroundColor(.white.opacity(0.7))
+                        )
                 }
-                .frame(height: 200)
-                .clipped()
-                .cornerRadius(16)
+
+                HStack {
+                    Label {
+                        Text(isActive ? (audio.isPlaying ? "Playing" : "Paused") : "Preview")
+                            .font(.caption)
+                    } icon: {
+                        Image(systemName: isActive && audio.isPlaying ? "waveform" : "play.circle")
+                    }
+                    .labelStyle(.titleAndIcon)
+                    .foregroundColor(.white)
+
+                    Spacer()
+
+                    Button {
+                        audio.toggleMute(for: track.trackId, url: audioURL)
+                    } label: {
+                        Image(systemName: isMutedForActiveTrack ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundColor(.white)
+                            .padding(8)
+                            .background(Color.black.opacity(0.35))
+                            .clipShape(Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(isMutedForActiveTrack ? "Unmute preview" : "Mute preview")
+                }
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    LinearGradient(
+                        colors: [Color.black.opacity(0.6), Color.black.opacity(0.0)],
+                        startPoint: .bottom,
+                        endPoint: .top
+                    )
+                )
             }
+            .frame(height: 200)
+            .clipped()
+            .cornerRadius(16)
+            .background(
+                GeometryReader { proxy in
+                    Color.clear
+                        .onAppear {
+                            handleVisibility(frame: proxy.frame(in: .global))
+                        }
+                        .onChange(of: proxy.frame(in: .global)) { frame in
+                            handleVisibility(frame: frame)
+                        }
+                        .onDisappear {
+                            audio.trackLeftViewport(trackId: track.trackId)
+                        }
+                }
+            )
 
             HStack(spacing: 24) {
                 Label("\(track.likesCount)", systemImage: "heart")
@@ -177,11 +257,22 @@ struct FeedPostView: View {
         let second = parts.dropFirst().first?.first.map(String.init) ?? ""
         return (first + second).uppercased()
     }
+
+    private func handleVisibility(frame: CGRect) {
+        guard frame.height > 0 else { return }
+        let screenHeight = UIScreen.main.bounds.height
+        let upper = max(frame.minY, 0)
+        let lower = min(frame.maxY, screenHeight)
+        let visibleHeight = max(0, lower - upper)
+        let ratio = max(0, min(visibleHeight / frame.height, 1))
+        audio.updateVisibility(for: track.trackId, ratio: ratio, url: audioURL)
+    }
 }
 
 struct TrackDetailView: View {
     @EnvironmentObject private var session: UserSession
     @State private var track: FeedTrack
+    @ObservedObject private var audio = FeedAudioManager.shared
     @State private var comments: [Comment] = []
     @State private var newComment = ""
     @State private var isLoading = false
@@ -191,10 +282,18 @@ struct TrackDetailView: View {
         _track = State(initialValue: track)
     }
 
+    private var audioURL: URL? {
+        absoluteURL(for: track.fileUrl)
+    }
+
     var body: some View {
         List {
             Section {
                 FeedPostView(track: track)
+                    .padding(.vertical, 8)
+
+                DetailAudioControls(track: track, audioURL: audioURL)
+                    .listRowInsets(EdgeInsets())
                     .padding(.vertical, 8)
 
                 HStack(spacing: 24) {
@@ -243,7 +342,11 @@ struct TrackDetailView: View {
             }
         }
         .onAppear {
+            audio.pin(trackId: track.trackId, url: audioURL)
             loadDetail()
+        }
+        .onDisappear {
+            audio.unpin(trackId: track.trackId)
         }
         .alert("Error", isPresented: Binding<Bool>(
             get: { errorMessage != nil },
@@ -330,6 +433,51 @@ struct CommentRow: View {
                 .font(.body)
         }
         .padding(.vertical, 4)
+    }
+}
+
+struct DetailAudioControls: View {
+    let track: FeedTrack
+    let audioURL: URL?
+    @ObservedObject private var audio = FeedAudioManager.shared
+
+    private var isActive: Bool {
+        audio.activeTrackId == track.trackId
+    }
+
+    private var isMutedForTrack: Bool {
+        guard isActive else { return true }
+        return audio.isMuted
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Inline Player")
+                .font(.footnote)
+                .foregroundColor(.secondary)
+
+            HStack(spacing: 16) {
+                Button {
+                    audio.togglePlayPause(for: track.trackId, url: audioURL)
+                } label: {
+                    Label(isActive && audio.isPlaying ? "Pause" : "Play",
+                          systemImage: isActive && audio.isPlaying ? "pause.fill" : "play.fill")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+
+                Button {
+                    audio.toggleMute(for: track.trackId, url: audioURL)
+                } label: {
+                    Label(isMutedForTrack ? "Unmute" : "Mute",
+                          systemImage: isMutedForTrack ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+            }
+        }
+        .padding()
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
     }
 }
 
