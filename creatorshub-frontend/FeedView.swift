@@ -343,10 +343,10 @@ struct TrackDetailView: View {
     @State private var track: FeedTrack
     @ObservedObject private var audio = FeedAudioManager.shared
     @State private var comments: [Comment] = []
-    @State private var newComment = ""
     @State private var isLoading = false
     @State private var errorMessage: String?
     @State private var showingFullscreenPlayer = false
+    @State private var isCommentComposerPresented = false
 
     init(track: FeedTrack) {
         _track = State(initialValue: track)
@@ -370,16 +370,20 @@ struct TrackDetailView: View {
                     Button {
                         toggleLike()
                     } label: {
-                        Label(
-                            track.likedByMe ? "Liked" : "Like",
-                            systemImage: track.likedByMe ? "heart.fill" : "heart"
-                        )
+                        Label("\(track.likesCount)", systemImage: track.likedByMe ? "heart.fill" : "heart")
+                            .foregroundColor(track.likedByMe ? .pink : .secondary)
                     }
-                    .tint(track.likedByMe ? .pink : .primary)
+                    .buttonStyle(.plain)
 
-                    Label("\(track.commentsCount) Comments", systemImage: "text.bubble")
-                        .foregroundColor(.secondary)
+                    Button {
+                        isCommentComposerPresented = true
+                    } label: {
+                        Label("\(track.commentsCount)", systemImage: "text.bubble")
+                            .foregroundColor(.secondary)
+                    }
+                    .buttonStyle(.plain)
                 }
+                .font(.headline)
             }
 
             Section("Comments") {
@@ -393,15 +397,6 @@ struct TrackDetailView: View {
                 }
             }
 
-            Section("Add a comment") {
-                VStack(spacing: 8) {
-                    TextField("Say something...", text: $newComment, axis: .vertical)
-                    Button("Post Comment") {
-                        postComment()
-                    }
-                    .disabled(newComment.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                }
-            }
         }
         .listStyle(.insetGrouped)
         .navigationTitle("Track")
@@ -428,6 +423,11 @@ struct TrackDetailView: View {
         }
         .fullScreenCover(isPresented: $showingFullscreenPlayer) {
             FullScreenAudioPlayerView(track: track, audioURL: audioURL)
+        }
+        .sheet(isPresented: $isCommentComposerPresented) {
+            CommentComposerView { text in
+                postComment(text: text)
+            }
         }
     }
 
@@ -467,15 +467,14 @@ struct TrackDetailView: View {
         }
     }
 
-    private func postComment() {
-        let trimmed = newComment.trimmingCharacters(in: .whitespacesAndNewlines)
+    private func postComment(text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, let token = session.accessToken else { return }
 
         APIService.shared.addComment(trackId: track.trackId, text: trimmed, accessToken: token) { result in
             DispatchQueue.main.async {
                 switch result {
                 case .success(let comment):
-                    newComment = ""
                     comments.insert(comment, at: 0)
                     track.commentsCount += 1
                 case .failure(let error):
@@ -656,6 +655,54 @@ struct FullScreenAudioPlayerView: View {
         let minutes = totalSeconds / 60
         let seconds = totalSeconds % 60
         return String(format: "%d:%02d", minutes, seconds)
+    }
+}
+
+struct CommentComposerView: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var text: String = ""
+    var onSubmit: (String) -> Void
+
+    var body: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Share your thoughts")
+                    .font(.headline)
+
+                TextEditor(text: $text)
+                    .frame(minHeight: 150)
+                    .padding(8)
+                    .background(
+                        RoundedRectangle(cornerRadius: 16)
+                            .fill(Color(.secondarySystemBackground))
+                    )
+
+                Spacer()
+            }
+            .padding()
+            .navigationTitle("New Comment")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        dismiss()
+                    }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Post") {
+                        submit()
+                    }
+                    .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+        }
+    }
+
+    private func submit() {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        onSubmit(trimmed)
+        dismiss()
     }
 }
 
