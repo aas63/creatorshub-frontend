@@ -42,7 +42,7 @@ struct FeedTrack: Codable, Identifiable {
     let caption: String?
     let fileUrl: String
     let coverImageUrl: String?
-    let createdAt: Date
+    let createdAt: Date?
     var likesCount: Int
     var commentsCount: Int
     var likedByMe: Bool

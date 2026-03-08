@@ -342,7 +342,8 @@ private func absoluteURL(for path: String?) -> URL? {
     return URL(string: APIService.shared.baseURL + cleaned)
 }
 
-private func relativeDateString(from date: Date) -> String {
+private func relativeDateString(from date: Date?) -> String {
+    guard let date = date else { return "just now" }
     let formatter = RelativeDateTimeFormatter()
     formatter.unitsStyle = .short
     return formatter.localizedString(for: date, relativeTo: Date())
