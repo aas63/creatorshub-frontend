@@ -30,8 +30,11 @@ struct FeedView: View {
                             NavigationLink {
                                 TrackDetailView(track: track)
                             } label: {
-                                FeedPostView(track: track)
-                                    .padding(.vertical, 8)
+                                FeedPostView(
+                                    track: track,
+                                    onToggleLike: { _ in toggleLike(trackId: track.trackId) }
+                                )
+                                .padding(.vertical, 8)
                             }
                             .listRowSeparator(.hidden)
                         }
@@ -92,6 +95,38 @@ struct FeedView: View {
             }
         }
     }
+
+    private func toggleLike(trackId: String) {
+        guard let token = session.accessToken else {
+            errorMessage = "Please log in to like tracks."
+            return
+        }
+
+        guard let index = tracks.firstIndex(where: { $0.trackId == trackId }) else {
+            return
+        }
+
+        let newValue = !tracks[index].likedByMe
+        tracks[index].likedByMe = newValue
+        tracks[index].likesCount += newValue ? 1 : -1
+        tracks[index].likesCount = max(tracks[index].likesCount, 0)
+
+        let service = newValue ? APIService.shared.likeTrack : APIService.shared.unlikeTrack
+
+        service(trackId, token) { result in
+            if case .failure(let error) = result {
+                DispatchQueue.main.async {
+                    guard let revertIndex = self.tracks.firstIndex(where: { $0.trackId == trackId }) else {
+                        return
+                    }
+                    self.tracks[revertIndex].likedByMe.toggle()
+                    self.tracks[revertIndex].likesCount += self.tracks[revertIndex].likedByMe ? 1 : -1
+                    self.tracks[revertIndex].likesCount = max(self.tracks[revertIndex].likesCount, 0)
+                    self.errorMessage = error.localizedDescription
+                }
+            }
+        }
+    }
 }
 
 extension Notification.Name {
@@ -100,6 +135,8 @@ extension Notification.Name {
 
 struct FeedPostView: View {
     let track: FeedTrack
+    var onToggleLike: ((FeedTrack) -> Void)?
+    var onMediaTapped: ((FeedTrack) -> Void)?
     @ObservedObject private var audio = FeedAudioManager.shared
 
     private var coverURL: URL? {
@@ -227,6 +264,9 @@ struct FeedPostView: View {
             .frame(height: 200)
             .clipped()
             .cornerRadius(16)
+            .modifier(MediaTapModifier(isEnabled: onMediaTapped != nil) {
+                onMediaTapped?(track)
+            })
             .background(
                 GeometryReader { proxy in
                     Color.clear
@@ -243,11 +283,23 @@ struct FeedPostView: View {
             )
 
             HStack(spacing: 24) {
-                Label("\(track.likesCount)", systemImage: "heart")
+                if let onToggleLike = onToggleLike {
+                    Button {
+                        onToggleLike(track)
+                    } label: {
+                        Label("\(track.likesCount)", systemImage: track.likedByMe ? "heart.fill" : "heart")
+                            .foregroundColor(track.likedByMe ? .pink : .secondary)
+                    }
+                    .buttonStyle(.plain)
+                } else {
+                    Label("\(track.likesCount)", systemImage: track.likedByMe ? "heart.fill" : "heart")
+                        .foregroundColor(track.likedByMe ? .pink : .secondary)
+                }
+
                 Label("\(track.commentsCount)", systemImage: "text.bubble")
+                    .foregroundColor(.secondary)
             }
             .font(.subheadline)
-            .foregroundColor(.secondary)
         }
     }
 
@@ -269,6 +321,23 @@ struct FeedPostView: View {
     }
 }
 
+private struct MediaTapModifier: ViewModifier {
+    let isEnabled: Bool
+    let action: () -> Void
+
+    func body(content: Content) -> some View {
+        if isEnabled {
+            content.simultaneousGesture(
+                TapGesture().onEnded {
+                    action()
+                }
+            )
+        } else {
+            content
+        }
+    }
+}
+
 struct TrackDetailView: View {
     @EnvironmentObject private var session: UserSession
     @State private var track: FeedTrack
@@ -277,6 +346,7 @@ struct TrackDetailView: View {
     @State private var newComment = ""
     @State private var isLoading = false
     @State private var errorMessage: String?
+    @State private var showingFullscreenPlayer = false
 
     init(track: FeedTrack) {
         _track = State(initialValue: track)
@@ -289,12 +359,12 @@ struct TrackDetailView: View {
     var body: some View {
         List {
             Section {
-                FeedPostView(track: track)
-                    .padding(.vertical, 8)
-
-                DetailAudioControls(track: track, audioURL: audioURL)
-                    .listRowInsets(EdgeInsets())
-                    .padding(.vertical, 8)
+                FeedPostView(
+                    track: track,
+                    onToggleLike: { _ in toggleLike() },
+                    onMediaTapped: { _ in showingFullscreenPlayer = true }
+                )
+                .padding(.vertical, 8)
 
                 HStack(spacing: 24) {
                     Button {
@@ -355,6 +425,9 @@ struct TrackDetailView: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text(errorMessage ?? "")
+        }
+        .fullScreenCover(isPresented: $showingFullscreenPlayer) {
+            FullScreenAudioPlayerView(track: track, audioURL: audioURL)
         }
     }
 
@@ -436,50 +509,156 @@ struct CommentRow: View {
     }
 }
 
-struct DetailAudioControls: View {
+struct FullScreenAudioPlayerView: View {
     let track: FeedTrack
     let audioURL: URL?
     @ObservedObject private var audio = FeedAudioManager.shared
+    @Environment(\.dismiss) private var dismiss
+    @State private var sliderValue: Double = 0
+    @State private var isEditingSlider = false
 
-    private var isActive: Bool {
-        audio.activeTrackId == track.trackId
-    }
-
-    private var isMutedForTrack: Bool {
-        guard isActive else { return true }
-        return audio.isMuted
+    private var coverURL: URL? {
+        absoluteURL(for: track.coverImageUrl ?? track.fileUrl)
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Inline Player")
-                .font(.footnote)
-                .foregroundColor(.secondary)
+        ZStack {
+            Color.black.ignoresSafeArea()
+            VStack(spacing: 24) {
+                HStack {
+                    Button {
+                        dismiss()
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.headline)
+                            .foregroundColor(.white)
+                            .padding(8)
+                            .background(Color.white.opacity(0.1), in: Circle())
+                    }
 
-            HStack(spacing: 16) {
-                Button {
-                    audio.togglePlayPause(for: track.trackId, url: audioURL)
-                } label: {
-                    Label(isActive && audio.isPlaying ? "Pause" : "Play",
-                          systemImage: isActive && audio.isPlaying ? "pause.fill" : "play.fill")
-                        .frame(maxWidth: .infinity)
+                    Spacer()
+                    Text(track.user.displayName)
+                        .foregroundColor(.white.opacity(0.8))
+                        .font(.footnote)
                 }
-                .buttonStyle(.borderedProminent)
 
-                Button {
-                    audio.toggleMute(for: track.trackId, url: audioURL)
-                } label: {
-                    Label(isMutedForTrack ? "Unmute" : "Mute",
-                          systemImage: isMutedForTrack ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                        .frame(maxWidth: .infinity)
+                Spacer()
+
+                if let coverURL = coverURL {
+                    AsyncImage(url: coverURL) { phase in
+                        switch phase {
+                        case .empty:
+                            ProgressView()
+                                .progressViewStyle(.circular)
+                                .frame(height: 240)
+                        case .success(let image):
+                            image
+                                .resizable()
+                                .scaledToFit()
+                                .frame(maxHeight: 320)
+                                .cornerRadius(24)
+                        case .failure:
+                            defaultArtwork
+                        @unknown default:
+                            defaultArtwork
+                        }
+                    }
+                } else {
+                    defaultArtwork
                 }
-                .buttonStyle(.bordered)
+
+                VStack(alignment: .leading, spacing: 12) {
+                    Text(track.title)
+                        .font(.title2).bold()
+                        .foregroundColor(.white)
+                    if let caption = track.caption, !caption.isEmpty {
+                        Text(caption)
+                            .foregroundColor(.white.opacity(0.8))
+                    }
+                }
+
+                VStack(spacing: 8) {
+                    Slider(
+                        value: Binding(
+                            get: { isEditingSlider ? sliderValue : audio.currentTime },
+                            set: { newValue in
+                                sliderValue = newValue
+                            }
+                        ),
+                        in: 0...(audio.duration > 0 ? audio.duration : 1),
+                        onEditingChanged: { editing in
+                            isEditingSlider = editing
+                            if !editing {
+                                audio.seek(to: sliderValue)
+                            }
+                        }
+                    )
+                    .tint(.white)
+
+                    HStack {
+                        Text(formatTime(isEditingSlider ? sliderValue : audio.currentTime))
+                        Spacer()
+                        Text(formatTime(audio.duration))
+                    }
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.7))
+                }
+
+                HStack(spacing: 24) {
+                    Button {
+                        audio.togglePlayPause(for: track.trackId, url: audioURL)
+                    } label: {
+                        Image(systemName: audio.isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                            .font(.system(size: 60))
+                            .foregroundColor(.white)
+                    }
+
+                    Button {
+                        audio.toggleMute(for: track.trackId, url: audioURL)
+                    } label: {
+                        Image(systemName: audio.isMuted ? "speaker.slash.circle.fill" : "speaker.wave.2.circle.fill")
+                            .font(.system(size: 44))
+                            .foregroundColor(.white)
+                    }
+                }
+
+                Spacer()
+            }
+            .padding()
+        }
+        .onAppear {
+            audio.pin(trackId: track.trackId, url: audioURL)
+            sliderValue = audio.currentTime
+        }
+        .onChange(of: audio.currentTime) { newValue in
+            if !isEditingSlider {
+                sliderValue = newValue
             }
         }
-        .padding()
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+    }
+
+    private var defaultArtwork: some View {
+        RoundedRectangle(cornerRadius: 24)
+            .fill(
+                LinearGradient(colors: [.purple, .black], startPoint: .topLeading, endPoint: .bottomTrailing)
+            )
+            .frame(height: 280)
+            .overlay(
+                Image(systemName: "waveform.circle")
+                    .font(.system(size: 64))
+                    .foregroundColor(.white.opacity(0.8))
+            )
+    }
+
+    private func formatTime(_ time: TimeInterval) -> String {
+        guard time.isFinite else { return "--:--" }
+        let totalSeconds = Int(time)
+        let minutes = totalSeconds / 60
+        let seconds = totalSeconds % 60
+        return String(format: "%d:%02d", minutes, seconds)
     }
 }
+
 
 private func absoluteURL(for path: String?) -> URL? {
     guard let path = path, !path.isEmpty else { return nil }

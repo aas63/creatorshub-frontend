@@ -10,9 +10,12 @@ final class FeedAudioManager: ObservableObject {
     @Published private(set) var isPlaying: Bool = false
     @Published private(set) var isMuted: Bool = true
     @Published private(set) var pinnedTrackId: String?
+    @Published private(set) var currentTime: TimeInterval = 0
+    @Published private(set) var duration: TimeInterval = 0
 
     private var player: AVPlayer?
     private var endObserver: Any?
+    private var timeObserver: Any?
     private var visibility: [String: CGFloat] = [:]
     private var currentURL: URL?
     private let autoplayThreshold: CGFloat = 0.6
@@ -115,10 +118,7 @@ final class FeedAudioManager: ObservableObject {
     private func startPlayback(with url: URL, trackId: String, muted: Bool) {
         configureAudioSessionIfNeeded()
 
-        if let observer = endObserver {
-            NotificationCenter.default.removeObserver(observer)
-            endObserver = nil
-        }
+        removeObservers()
 
         let item = AVPlayerItem(url: url)
         let player = AVPlayer(playerItem: item)
@@ -133,7 +133,19 @@ final class FeedAudioManager: ObservableObject {
         ) { [weak self] _ in
             guard let self else { return }
             self.isPlaying = false
+            self.currentTime = 0
         }
+
+        timeObserver = player.addPeriodicTimeObserver(
+            forInterval: CMTime(seconds: 0.25, preferredTimescale: 600),
+            queue: .main
+        ) { [weak self] time in
+            self?.currentTime = time.seconds
+        }
+
+        let durationSeconds = CMTimeGetSeconds(item.asset.duration)
+        duration = durationSeconds.isFinite && durationSeconds > 0 ? durationSeconds : 0
+        currentTime = 0
 
         self.player = player
         currentURL = url
@@ -146,9 +158,12 @@ final class FeedAudioManager: ObservableObject {
         player?.pause()
         isPlaying = false
         if clearActive {
+            removeObservers()
             player = nil
             currentURL = nil
             activeTrackId = nil
+            currentTime = 0
+            duration = 0
         }
     }
 
@@ -162,5 +177,23 @@ final class FeedAudioManager: ObservableObject {
         } catch {
             print("[FeedAudioManager] Failed to configure audio session:", error)
         }
+    }
+
+    private func removeObservers() {
+        if let observer = endObserver {
+            NotificationCenter.default.removeObserver(observer)
+            endObserver = nil
+        }
+        if let timeObserver = timeObserver {
+            player?.removeTimeObserver(timeObserver)
+            self.timeObserver = nil
+        }
+    }
+
+    func seek(to time: TimeInterval) {
+        guard let player = player, duration > 0 else { return }
+        let clamped = max(0, min(time, duration))
+        player.seek(to: CMTime(seconds: clamped, preferredTimescale: 600))
+        currentTime = clamped
     }
 }
