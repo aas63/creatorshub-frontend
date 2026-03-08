@@ -31,6 +31,28 @@ struct TrackUserReference: Codable {
     let id: String
     let username: String
     let displayName: String
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case username
+        case displayName
+    }
+
+    init(id: String, username: String, displayName: String) {
+        self.id = id
+        self.username = username
+        self.displayName = displayName
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let id = try container.decode(String.self, forKey: .id)
+        let username = try container.decode(String.self, forKey: .username)
+        let displayName = (try? container.decode(String.self, forKey: .displayName))?.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.id = id
+        self.username = username
+        self.displayName = (displayName?.isEmpty == false ? displayName! : username)
+    }
 }
 
 struct FeedTrack: Codable, Identifiable {
@@ -47,6 +69,65 @@ struct FeedTrack: Codable, Identifiable {
     var commentsCount: Int
     var likedByMe: Bool
     let user: TrackUserReference
+
+    enum CodingKeys: String, CodingKey {
+        case trackId
+        case userId
+        case title
+        case description
+        case caption
+        case fileUrl
+        case coverImageUrl
+        case createdAt
+        case likesCount
+        case commentsCount
+        case likedByMe
+        case user
+    }
+
+    init(
+        trackId: String,
+        userId: String,
+        title: String,
+        description: String?,
+        caption: String?,
+        fileUrl: String,
+        coverImageUrl: String?,
+        createdAt: Date?,
+        likesCount: Int,
+        commentsCount: Int,
+        likedByMe: Bool,
+        user: TrackUserReference
+    ) {
+        self.trackId = trackId
+        self.userId = userId
+        self.title = title
+        self.description = description
+        self.caption = caption
+        self.fileUrl = fileUrl
+        self.coverImageUrl = coverImageUrl
+        self.createdAt = createdAt
+        self.likesCount = likesCount
+        self.commentsCount = commentsCount
+        self.likedByMe = likedByMe
+        self.user = user
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        trackId = try container.decode(String.self, forKey: .trackId)
+        userId = try container.decode(String.self, forKey: .userId)
+        title = try container.decode(String.self, forKey: .title)
+        description = try? container.decode(String.self, forKey: .description)
+        caption = try? container.decode(String.self, forKey: .caption)
+        fileUrl = try container.decode(String.self, forKey: .fileUrl)
+        coverImageUrl = try? container.decode(String.self, forKey: .coverImageUrl)
+        createdAt = try? container.decode(Date.self, forKey: .createdAt)
+        likesCount = container.decodeFlexibleInt(forKey: .likesCount)
+        commentsCount = container.decodeFlexibleInt(forKey: .commentsCount)
+        likedByMe = container.decodeFlexibleBool(forKey: .likedByMe)
+        user = try container.decode(TrackUserReference.self, forKey: .user)
+    }
 }
 
 struct TrackUploadResponse: Codable {
@@ -135,7 +216,6 @@ class APIService {
             }
         }.resume()
     }
-
     // MARK: - Login
     func login(email: String, password: String, completion: @escaping (Result<AuthResponse, Error>) -> Void) {
         let decoder = makeDecoder()
@@ -599,5 +679,42 @@ class APIService {
         default:
             return "application/octet-stream"
         }
+    }
+}
+
+private extension KeyedDecodingContainer where Key: CodingKey {
+    func decodeFlexibleInt(forKey key: Key) -> Int {
+        if let value = try? decode(Int.self, forKey: key) {
+            return value
+        }
+        if let stringValue = try? decode(String.self, forKey: key), let intValue = Int(stringValue) {
+            return intValue
+        }
+        if let doubleValue = try? decode(Double.self, forKey: key) {
+            return Int(doubleValue)
+        }
+        if let boolValue = try? decode(Bool.self, forKey: key) {
+            return boolValue ? 1 : 0
+        }
+        return 0
+    }
+
+    func decodeFlexibleBool(forKey key: Key) -> Bool {
+        if let value = try? decode(Bool.self, forKey: key) {
+            return value
+        }
+        if let intValue = try? decode(Int.self, forKey: key) {
+            return intValue != 0
+        }
+        if let stringValue = try? decode(String.self, forKey: key) {
+            let normalized = stringValue.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            if ["true", "t", "1", "yes", "y"].contains(normalized) {
+                return true
+            }
+            if ["false", "f", "0", "no", "n"].contains(normalized) {
+                return false
+            }
+        }
+        return false
     }
 }
