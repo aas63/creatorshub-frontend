@@ -147,11 +147,67 @@ struct Comment: Codable, Identifiable {
     let text: String
     let createdAt: Date?
     let user: TrackUserReference
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case trackId
+        case text
+        case createdAt
+        case user
+    }
+
+    init(id: String, trackId: String, text: String, createdAt: Date?, user: TrackUserReference) {
+        self.id = id
+        self.trackId = trackId
+        self.text = text
+        self.createdAt = createdAt
+        self.user = user
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        trackId = try container.decode(String.self, forKey: .trackId)
+        text = try container.decode(String.self, forKey: .text)
+        user = try container.decode(TrackUserReference.self, forKey: .user)
+
+        if let isoString = try? container.decode(String.self, forKey: .createdAt) {
+            createdAt = ISO8601DateFormatterCache.fractional.date(from: isoString)
+                ?? ISO8601DateFormatterCache.basic.date(from: isoString)
+        } else if let timestamp = try? container.decode(Double.self, forKey: .createdAt) {
+            // Assume seconds if timestamp looks reasonable (> 1e12 would imply ms).
+            if timestamp > 10_000_000_000 {
+                createdAt = Date(timeIntervalSince1970: timestamp / 1000)
+            } else {
+                createdAt = Date(timeIntervalSince1970: timestamp)
+            }
+        } else if let dateValue = try? container.decode(Date.self, forKey: .createdAt) {
+            createdAt = dateValue
+        } else {
+            createdAt = nil
+        }
+    }
 }
 
 struct TrackDetailResponse: Codable {
     let track: FeedTrack
     let comments: [Comment]
+
+    enum CodingKeys: String, CodingKey {
+        case track
+        case comments
+    }
+
+    init(track: FeedTrack, comments: [Comment]) {
+        self.track = track
+        self.comments = comments
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        track = try container.decode(FeedTrack.self, forKey: .track)
+        comments = (try? container.decode([Comment].self, forKey: .comments)) ?? []
+    }
 }
 
 class APIService {
@@ -717,4 +773,18 @@ private extension KeyedDecodingContainer where Key: CodingKey {
         }
         return false
     }
+}
+
+private enum ISO8601DateFormatterCache {
+    static let fractional: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+
+    static let basic: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter
+    }()
 }
