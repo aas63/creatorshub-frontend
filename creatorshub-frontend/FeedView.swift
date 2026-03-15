@@ -136,6 +136,7 @@ extension Notification.Name {
 struct FeedPostView: View {
     let track: FeedTrack
     var onToggleLike: ((FeedTrack) -> Void)?
+    var onCommentTap: ((FeedTrack) -> Void)?
     var onMediaTapped: ((FeedTrack) -> Void)?
     @ObservedObject private var audio = FeedAudioManager.shared
 
@@ -296,8 +297,18 @@ struct FeedPostView: View {
                         .foregroundColor(track.likedByMe ? .pink : .secondary)
                 }
 
-                Label("\(track.commentsCount)", systemImage: "text.bubble")
-                    .foregroundColor(.secondary)
+                if let onCommentTap = onCommentTap {
+                    Button {
+                        onCommentTap(track)
+                    } label: {
+                        Label("\(track.commentsCount)", systemImage: "text.bubble")
+                            .foregroundColor(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                } else {
+                    Label("\(track.commentsCount)", systemImage: "text.bubble")
+                        .foregroundColor(.secondary)
+                }
             }
             .font(.subheadline)
         }
@@ -362,28 +373,10 @@ struct TrackDetailView: View {
                 FeedPostView(
                     track: track,
                     onToggleLike: { _ in toggleLike() },
+                    onCommentTap: { _ in isCommentComposerPresented = true },
                     onMediaTapped: { _ in showingFullscreenPlayer = true }
                 )
                 .padding(.vertical, 8)
-
-                HStack(spacing: 24) {
-                    Button {
-                        toggleLike()
-                    } label: {
-                        Label("\(track.likesCount)", systemImage: track.likedByMe ? "heart.fill" : "heart")
-                            .foregroundColor(track.likedByMe ? .pink : .secondary)
-                    }
-                    .buttonStyle(.plain)
-
-                    Button {
-                        isCommentComposerPresented = true
-                    } label: {
-                        Label("\(track.commentsCount)", systemImage: "text.bubble")
-                            .foregroundColor(.secondary)
-                    }
-                    .buttonStyle(.plain)
-                }
-                .font(.headline)
             }
 
             Section("Comments") {

@@ -145,7 +145,7 @@ struct Comment: Codable, Identifiable {
     let id: String
     let trackId: String
     let text: String
-    let createdAt: Date
+    let createdAt: Date?
     let user: TrackUserReference
 }
 
