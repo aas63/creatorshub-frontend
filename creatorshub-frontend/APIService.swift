@@ -122,7 +122,7 @@ struct FeedTrack: Codable, Identifiable {
         caption = try? container.decode(String.self, forKey: .caption)
         fileUrl = try container.decode(String.self, forKey: .fileUrl)
         coverImageUrl = try? container.decode(String.self, forKey: .coverImageUrl)
-        createdAt = try? container.decode(Date.self, forKey: .createdAt)
+        createdAt = container.decodeFlexibleDate(forKey: .createdAt)
         likesCount = container.decodeFlexibleInt(forKey: .likesCount)
         commentsCount = container.decodeFlexibleInt(forKey: .commentsCount)
         likedByMe = container.decodeFlexibleBool(forKey: .likedByMe)
@@ -772,6 +772,33 @@ private extension KeyedDecodingContainer where Key: CodingKey {
             }
         }
         return false
+    }
+
+    func decodeFlexibleDate(forKey key: Key) -> Date? {
+        if let date = try? decode(Date.self, forKey: key) {
+            return date
+        }
+        if let stringValue = try? decode(String.self, forKey: key) {
+            if let date = ISO8601DateFormatterCache.fractional.date(from: stringValue) {
+                return date
+            }
+            if let date = ISO8601DateFormatterCache.basic.date(from: stringValue) {
+                return date
+            }
+            let formatter = DateFormatter()
+            formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss"
+            if let date = formatter.date(from: stringValue) {
+                return date
+            }
+        }
+        if let timestamp = try? decode(Double.self, forKey: key) {
+            if timestamp > 10_000_000_000 {
+                return Date(timeIntervalSince1970: timestamp / 1000)
+            } else {
+                return Date(timeIntervalSince1970: timestamp)
+            }
+        }
+        return nil
     }
 }
 

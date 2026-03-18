@@ -709,9 +709,34 @@ private func absoluteURL(for path: String?) -> URL? {
     return URL(string: APIService.shared.baseURL + cleaned)
 }
 
+private let absoluteDateFormatter: DateFormatter = {
+    let formatter = DateFormatter()
+    formatter.dateFormat = "M/d/yy"
+    return formatter
+}()
+
 private func relativeDateString(from date: Date?) -> String {
     guard let date = date else { return "just now" }
-    let formatter = RelativeDateTimeFormatter()
-    formatter.unitsStyle = .short
-    return formatter.localizedString(for: date, relativeTo: Date())
+    let now = Date()
+    let interval = max(0, now.timeIntervalSince(date))
+
+    let minute: TimeInterval = 60
+    let hour: TimeInterval = 60 * minute
+    let day: TimeInterval = 24 * hour
+
+    if interval < minute {
+        let seconds = Int(interval)
+        return "\(seconds)s"
+    } else if interval < hour {
+        let minutes = Int(interval / minute)
+        return "\(minutes)m"
+    } else if interval < day {
+        let hours = Int(interval / hour)
+        return "\(hours)h"
+    } else if interval < day * 10 {
+        let days = Int(interval / day)
+        return "\(days)d"
+    } else {
+        return absoluteDateFormatter.string(from: date)
+    }
 }
