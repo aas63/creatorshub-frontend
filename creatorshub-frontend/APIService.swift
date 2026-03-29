@@ -212,9 +212,16 @@ struct TrackDetailResponse: Codable {
 
 class APIService {
     static let shared = APIService()
-    let baseURL = "http://localhost:3000"
+    let baseURL: String
 
-    private init() {}
+    private init() {
+        if let configured = Bundle.main.object(forInfoDictionaryKey: "API_BASE_URL") as? String,
+           !configured.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            baseURL = configured
+        } else {
+            baseURL = "https://creatorshub-backend-wb1m.onrender.com"
+        }
+    }
 
     private func makeDecoder() -> JSONDecoder {
         let decoder = JSONDecoder()
